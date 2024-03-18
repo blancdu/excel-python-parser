@@ -1,0 +1,6 @@
+.vscode
+*/*.xlsx
+*.xlsx
+*.zip
+*.db
+*.log
