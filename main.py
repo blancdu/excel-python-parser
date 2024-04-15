@@ -7,8 +7,11 @@ import pandas as pd
 import sqlalchemy as sa
 import multiprocessing
 
+if os.path.isfile('log.log'):
+    os.remove('log.log')
+
 logging.basicConfig(filename="log.log",
-                    level=logging.WARNING, filemode='w', format='%(message)s')
+                    level=logging.WARNING, filemode='a', format='%(message)s')
 
 
 def createFolder(directory):
@@ -19,8 +22,10 @@ def createFolder(directory):
         print('Error: Creating directory. ' + directory)
 
 
-def excel_2_sql(filename: str) -> None:
-    df = pd.read_excel(filename, engine='openpyxl', usecols=[0, 1, 2, 3])
+def excel_2_sql(filename: str, sheet_idx:int=0) -> None:
+    xlsx = pd.ExcelFile(filename)
+    sheet_name = xlsx.sheet_names[sheet_idx]
+    df = pd.read_excel(filename, engine='openpyxl', sheet_name=sheet_name, usecols=[0, 1, 2, 3])
     engine = sa.create_engine(
         'sqlite:///db.db', echo=False, use_insertmanyvalues=True)
     sqlite_connection = engine.connect()
@@ -60,6 +65,7 @@ def translate(filename: str) -> None:
 
         coord, cn, kr = row
         r, c = coord_2_idx(coord)
+        c = c*2
         try:
             target_value = df.iat[r, c]
             if target_value is pd.NA:
@@ -81,6 +87,7 @@ def translate(filename: str) -> None:
         if not cn:
             cn = ''
         if not kr:
+            return False
             kr = ''
         if not all([target_value, cn, kr]):
             if not any([target_value, cn, kr]):
@@ -95,13 +102,19 @@ def translate(filename: str) -> None:
             logging.warning('mismatch')
             logging.warning(f'[{table_name}]-통합시트{coord} "{cn}" "{kr}"')
             logging.warning(f'[{table_name}.xlsx]{coord}: "{target_value}"')
+            return False
 
         return True
 
     xlsx = pd.ExcelFile('src/'+filename)
+    sheet_name = xlsx.sheet_names[0]
     df = pd.read_excel(xlsx, engine='openpyxl',
-                       header=None, dtype='string')
-    # print(df)
+                       header=None, dtype='string', sheet_name=sheet_name)
+
+    # dst columns duplication
+    column_size = len(df.columns)
+    for i in range(column_size):
+        df.insert(i*2+1, (i*2+1)/2, "")
     con = sqlite3.connect('db.db')
     cur = con.cursor()
 
@@ -112,11 +125,12 @@ def translate(filename: str) -> None:
     for row in rows:
         coord, _, kr = row
         r, c = coord_2_idx(coord)
+        c = c*2+1
         # validation is optional func
         if not validation(table_name, row, df):
             continue
         df.iat[r, c] = kr
-    df.to_excel(excel_writer='dst/'+filename, sheet_name=xlsx.sheet_names[0],
+    df.to_excel(excel_writer='dst/'+filename, sheet_name=sheet_name,
                 header=False, index=False, engine='openpyxl')
     return True
 
@@ -124,9 +138,12 @@ def translate(filename: str) -> None:
 if __name__ == '__main__':
     createFolder('src')
     createFolder('dst')
-    print('db 생성 시작')
-    excel_2_sql('sorted_translated.xlsx')
-    print('db 생성 완료')
+    if os.path.isfile('db.db'):
+        print('기존 db 발견')
+    else:    
+        print('db 생성 시작')
+        excel_2_sql('main.xlsx')
+        print('db 생성 완료')
     file_list = [x for x in os.listdir('./src/') if x[-5:] == '.xlsx']
     print('변환 시작')
     result = multiprocessing.Pool().map(translate, file_list)
