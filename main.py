@@ -43,7 +43,7 @@ def excel_2_sql(filename: str, sheet_idx:int=0) -> None:
     sqlite_connection.close()
 
 
-def translate(filename: str) -> None:
+def translate(filename: str) -> bool:
     def coord_2_idx(coord: str) -> tuple[int]:
         if not coord:
             return None
@@ -135,7 +135,51 @@ def translate(filename: str) -> None:
     return True
 
 
+def omission_check(filename: str) -> bool:
+    # idx2coord function
+    # if cell is not na
+    # db tablename:filename coord:idx2coord cn:cell value check
+    # if there is not in db then logging
+    omission_cnt = 0
+    def col_index_to_letter(column_index:int):
+        letter = ''
+        while column_index > 25:
+            letter += chr(65 + int(column_index/26) -1)
+            column_index -= int(column_index/26)*26
+        letter += chr(65 + int(column_index))
+        return letter
+
+    xlsx = pd.ExcelFile('src/'+filename)
+    sheet_name = xlsx.sheet_names[0]
+    df = pd.read_excel(xlsx, engine='openpyxl',
+                       header=None, dtype='string', sheet_name=sheet_name)
+
+    con = sqlite3.connect('db.db')
+    cur = con.cursor()
+    table_name = filename[:-5]
+
+    df = df.fillna('')
+    for c, s in df.items():
+        df[c] = s.str.removesuffix('_x000d_')
+        for r, v in s.items():
+            if v:
+                coord = col_index_to_letter(c)+str(r+1)
+                cn = df[c][r]
+                rows = cur.execute(f'SELECT * FROM {table_name} WHERE coord = "{coord}"').fetchall()
+                if len(rows) == 1:
+                    _, dbcn, _ = rows[0]
+                    if dbcn != cn:
+                        omission_cnt += 1
+                        logging.warning(f'mismatch: [{table_name}:{coord}] {dbcn},{cn}')
+                else:
+                    omission_cnt += 1
+                    logging.warning("rows length is not 1")
+    cur.close()
+    return omission_cnt
+
+
 if __name__ == '__main__':
+    translate_mode = True
     createFolder('src')
     createFolder('dst')
     if os.path.isfile('db.db'):
@@ -145,10 +189,20 @@ if __name__ == '__main__':
         excel_2_sql('main.xlsx')
         print('db 생성 완료')
     file_list = [x for x in os.listdir('./src/') if x[-5:] == '.xlsx']
-    print('변환 시작')
-    result = multiprocessing.Pool().map(translate, file_list)
-    if all(result):
-        print('변환 완료')
+    if translate_mode:
+        print('변환 시작')
+        result = multiprocessing.Pool().map(translate, file_list)
+        if all(result):
+            print('변환 완료')
+        else:
+            print('일부 변환 완료')
+            print(result)
     else:
-        print('일부 변환 완료')
-        print(result)
+        print('누락 검출 시작')
+        result = multiprocessing.Pool().map(omission_check(), file_list)
+        omission_file_list = []
+        for file, res in zip(file_list, result):
+            if res:
+                omission_file_list.append((file, res))
+        for file, res in omission_file_list:
+            print(f'{file} has {res} missing values')
